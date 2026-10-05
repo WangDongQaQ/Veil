@@ -5,6 +5,24 @@ import SwiftUI
 /// Developer aid: `VEIL_SNAPSHOT_DIR=/some/dir open Veil.app` renders the widget (hidden, revealed, edit mode)
 /// and the settings window into PNGs and quits. It only draws Veil's own windows, so it needs no
 /// screen-recording permission.
+/// `VEIL_DEBUG_SCROLL=1` logs to the console, `=/path/file` appends to a file (use that with `open --env`).
+enum DebugLog {
+    private static let target: String? = ProcessInfo.processInfo.environment["VEIL_DEBUG_SCROLL"]
+    static var isOn: Bool { target != nil }
+
+    static func write(_ text: @autoclosure () -> String) {
+        guard let target else { return }
+        let text = text()
+        guard target.hasPrefix("/") else { NSLog("%@", text); return }
+        let line = String(format: "%.3f ", Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1000)) + text + "\n"
+        if let handle = FileHandle(forWritingAtPath: target) {
+            handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close()
+        } else {
+            try? line.write(toFile: target, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
 @MainActor
 enum DebugSnapshot {
     /// `VEIL_FEED_FILE=speech.aiff` pushes an audio file through the selected recognition engine
@@ -142,7 +160,12 @@ enum DebugSnapshot {
         return true
     }
 
+    private static var napToken: NSObjectProtocol?
+
     static func runIfRequested(model: AppModel) {
+        if ProcessInfo.processInfo.environment["VEIL_NO_APPNAP"] != nil {
+            napToken = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "snapshot test")
+        }
         feedFileIfRequested(model: model)
         guard let dir = ProcessInfo.processInfo.environment["VEIL_SNAPSHOT_DIR"] else { return }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -186,6 +209,46 @@ enum DebugSnapshot {
             try? await Task.sleep(for: .seconds(0.8))
             save(panel, to: "\(dir)/4-edit.png")
             model.store.editMode = false
+
+            DebugLog.write("--- stage overflow begins")
+            // Overflow: far more text than fits. Expect the newest lines visible, older ones faded at the top.
+            model.store.clear()
+            controller.debugPointer = CGPoint(x: -2000, y: -2000)
+            let sentences = ["第一句：我们先从上周的进度开始。", "第二句：设计稿已经确认过两轮了。", "第三句：接口联调还差支付这一块。",
+                             "第四句：测试环境明天上午可以交付。", "第五句：下周三之前需要完成灰度发布。", "第六句：如果有风险请今天内告诉我。",
+                             "第七句：另外会议纪要我会整理后发给大家。", "第八句：最后一句是这条，应该出现在最底部。"]
+            for text in sentences { model.store.apply(TranscriptEvent(kind: .final, text: text)) }
+            DebugLog.write("--- 8 sentences applied")
+            try? await Task.sleep(for: .seconds(1.5))
+            save(panel, to: "\(dir)/7-overflow.png")
+            // Pointer over the text: the panel should start accepting mouse events so the wheel reaches it.
+            controller.debugPointer = CGPoint(x: 120, y: panel.frame.height / 2)
+            try? await Task.sleep(for: .seconds(1.2))
+            DebugLog.write("hover → wantsMouse=\(model.store.wantsMouse) ignoresMouseEvents=\(panel.ignoresMouseEvents)")
+            @MainActor func catcher(in view: NSView) -> NSView? {
+                if String(describing: type(of: view)).contains("CatcherView") { return view }
+                for sub in view.subviews { if let found = catcher(in: sub) { return found } }
+                return nil
+            }
+            @MainActor func wheel(_ points: Int32) {
+                // Positive = fingers swipe down = earlier text (natural scrolling), like a real trackpad event.
+                guard let target = panel.contentView.flatMap(catcher(in:)),
+                      let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: points, wheel2: 0, wheel3: 0),
+                      let event = NSEvent(cgEvent: cg) else { DebugLog.write("wheel: no catcher view found"); return }
+                target.scrollWheel(with: event)
+            }
+            wheel(50)
+            try? await Task.sleep(for: .seconds(0.6))
+            save(panel, to: "\(dir)/8-scrolled-a-bit.png")
+            wheel(400)
+            try? await Task.sleep(for: .seconds(0.6))
+            save(panel, to: "\(dir)/8-scrolled-top.png")
+            // Leave: should glide back to the newest text and stop capturing the mouse.
+            controller.debugPointer = CGPoint(x: -2000, y: -2000)
+            try? await Task.sleep(for: .seconds(1.2))
+            DebugLog.write("left → wantsMouse=\(model.store.wantsMouse) ignoresMouseEvents=\(panel.ignoresMouseEvents)")
+            save(panel, to: "\(dir)/9-returned.png")
+            model.store.clear()
 
             // Background styles, revealed so the shape is visible.
             for (name, style) in [("glass", CaptionBackground.glass), ("dim", .dim)] {

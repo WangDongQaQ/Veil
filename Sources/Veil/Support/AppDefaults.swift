@@ -11,6 +11,11 @@ enum AppDefaults {
     static let store: UserDefaults = {
         guard isDebugRun, let suite = UserDefaults(suiteName: "com.aspen.Veil.debug") else { return .standard }
         suite.removePersistentDomain(forName: "com.aspen.Veil.debug")
+        // Lets a test start from settings saved by an older version (migration checks).
+        if let seed = ProcessInfo.processInfo.environment["VEIL_SEED_PREFS"],
+           let data = try? Data(contentsOf: URL(fileURLWithPath: seed)) {
+            suite.set(data, forKey: "preferences.v1")
+        }
         return suite
     }()
 }

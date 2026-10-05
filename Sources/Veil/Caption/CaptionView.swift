@@ -17,6 +17,12 @@ struct CaptionView: View {
     @State private var revealOrigin: CGPoint = .zero      // widget coordinates
     @State private var revealRadius: CGFloat = 0
     @State private var hideTask: Task<Void, Never>?
+    /// The visible text area (inside the widget's padding), in widget coordinates.
+    @State private var viewport: CGRect = .zero
+    /// Own scroll state (rather than ScrollView): programmatic ScrollView scrolling stalls in this non-activating panel.
+    @State private var scrollOffset: CGFloat = 0          // how far the text is scrolled up, 0…maxScroll
+    @State private var contentHeight: CGFloat = 0
+    @State private var pointerWasOverText = false
 
     private static let placeholder = "这里会显示实时字幕。把光标移到文字上，遮罩就会散开。"
 
@@ -24,10 +30,6 @@ struct CaptionView: View {
         let p = settings.p
         ZStack {
             captionLayer(p)
-                .frame(maxWidth: .infinity, maxHeight: .infinity,
-                       alignment: Alignment(horizontal: p.textAlign.horizontal,
-                                            vertical: p.textAnchor == .bottom ? .bottom : .top))
-                .padding(10)
 
             if store.editMode {
                 EditOverlay(onDone: onFinishEditing)
@@ -37,11 +39,22 @@ struct CaptionView: View {
         .opacity(p.overallOpacity)
         .animation(.easeOut(duration: 0.2), value: store.editMode)
         .onChange(of: store.pointer) { _, _ in updateHover() }
-        .onChange(of: textFrame) { _, _ in
+        .onChange(of: textFrame) { _, new in
             updateHover()
             if revealed, settings.p.revealMode == .block { revealRadius = fullRadius() }
         }
-        .onChange(of: store.hasContent) { _, has in if !has && !store.editMode { resetReveal() } }
+        .onChange(of: viewport) { _, _ in
+            clampScroll()
+            updateHover()
+        }
+        .onChange(of: p.allowScrollBack) { _, _ in updateHover() }
+        .onChange(of: store.hasContent) { _, has in
+            if !has {
+                scrollOffset = 0
+                contentHeight = 0
+                if !store.editMode { resetReveal() }
+            }
+        }
         .onChange(of: store.editMode) { _, editing in if !editing && !store.hasContent { resetReveal() } }
         .onChange(of: p.spoilerEnabled) { _, _ in resetReveal() }
         .onChange(of: p.revealMode) { _, _ in resetReveal() }
@@ -49,18 +62,102 @@ struct CaptionView: View {
 
     // MARK: Layers
 
+    private var maxScroll: CGFloat { max(0, contentHeight - viewport.height) }
+    private var overflow: Bool { viewport.height > 0 && maxScroll > 1 }
+
+    /// Scrollable text area. Text starts at the top-left (or bottom, per setting); once it outgrows the widget the
+    /// view follows the newest text and fades the older lines out. Hovering lets you scroll back through them.
     @ViewBuilder
     private func captionLayer(_ p: Preferences) -> some View {
-        TimelineView(.animation(minimumInterval: 0.1, paused: !store.hasContent)) { timeline in
-            let runs = displayRuns(now: timeline.date)
-            if !runs.isEmpty {
-                textBlock(runs: runs, p)
-                    .padding(.horizontal, p.background == .none ? 0 : 16)
-                    .padding(.vertical, p.background == .none ? 0 : 11)
-                    .background { backgroundShape(p) }
-                    .transition(.opacity)
+        GeometryReader { geo in
+            let limit = max(0, contentHeight - geo.size.height)
+            let offset = min(max(0, scrollOffset), limit)
+            // Short text sits at the top (or bottom, per setting); once it outgrows the area it is top-aligned
+            // and scrolled by `offset`.
+            let fits = contentHeight <= geo.size.height + 1
+            let vertical: VerticalAlignment = fits && p.textAnchor == .bottom ? .bottom : .top
+            ZStack(alignment: Alignment(horizontal: p.textAlign.horizontal, vertical: vertical)) {
+                TimelineView(.animation(minimumInterval: 0.1, paused: !store.hasContent)) { timeline in
+                    let runs = displayRuns(now: timeline.date)
+                    if !runs.isEmpty {
+                        textBlock(runs: runs, p)
+                            .padding(.horizontal, p.background == .none ? 0 : 16)
+                            .padding(.vertical, p.background == .none ? 0 : 11)
+                            .background { backgroundShape(p) }
+                    }
+                }
+                .padding(6)                                      // room for the text's halo inside the clip
+                .background {
+                    // The text's natural height — measured before anything stretches it to the area.
+                    GeometryReader { proxy in
+                        Color.clear.onChange(of: proxy.size.height, initial: true) { _, height in
+                            contentHeightChanged(height)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: p.textAlign.frameAlignment)
+                .offset(y: -offset)
             }
+            .frame(width: geo.size.width, height: geo.size.height,
+                   alignment: Alignment(horizontal: p.textAlign.horizontal, vertical: vertical))
+            .clipped()
+            .mask { edgeFade(offset: offset, limit: limit) }
+            .overlay {
+                if store.wantsMouse { ScrollCatcher { delta in scrollBy(delta) } }
+            }
+            // Nearly invisible, but non-zero alpha, so the window server hands the scroll wheel to us
+            // (fully transparent pixels would pass it through to the app underneath).
+            .background(Color.black.opacity(store.wantsMouse ? 0.012 : 0))
+            .onChange(of: geo.frame(in: .named("widget")), initial: true) { _, frame in viewport = frame }
         }
+        .padding(4)
+    }
+
+    /// Fades the top / bottom edge while there is more text beyond it.
+    private func edgeFade(offset: CGFloat, limit: CGFloat) -> some View {
+        let more = limit > 1
+        return VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: more && offset > 2 ? 28 : 0)
+            Color.black
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: more && offset < limit - 3 ? 28 : 0)
+        }
+        .animation(.easeOut(duration: 0.2), value: offset > 2)
+        .animation(.easeOut(duration: 0.2), value: offset < limit - 3)
+    }
+
+    // MARK: Scrolling
+
+    private func contentHeightChanged(_ new: CGFloat) {
+        DebugLog.write("measured content height \(Int(new)) (viewport \(Int(viewport.height)))")
+        let old = contentHeight
+        contentHeight = new
+        guard viewport.height > 0 else { return }
+        // Pinned to the newest text (or nothing was scrollable yet): follow it as it grows.
+        let wasPinned = scrollOffset >= max(0, old - viewport.height) - 3
+        if wasPinned, maxScroll > scrollOffset + 0.5 {
+            animateScroll(to: maxScroll, duration: 0.2)
+        } else {
+            clampScroll()
+        }
+        DebugLog.write("content \(Int(old))→\(Int(new)) viewport \(Int(viewport.height)) offset \(Int(scrollOffset))→\(Int(min(scrollOffset, maxScroll)))")
+    }
+
+    private func clampScroll() {
+        let clamped = min(max(0, scrollOffset), maxScroll)
+        if clamped != scrollOffset { scrollOffset = clamped }
+    }
+
+    private func animateScroll(to target: CGFloat, duration: Double) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: duration)) { scrollOffset = target }
+    }
+
+    /// Wheel / trackpad: positive = towards newer text.
+    private func scrollBy(_ delta: CGFloat) {
+        let target = min(max(0, scrollOffset + delta), maxScroll)
+        if target != scrollOffset { scrollOffset = target }
+        DebugLog.write("scrollBy \(Int(delta)) → offset \(Int(scrollOffset)) of \(Int(maxScroll))")
     }
 
     private func displayRuns(now: Date) -> [CaptionStore.Run] {
@@ -169,13 +266,24 @@ struct CaptionView: View {
 
     private func updateHover() {
         let p = settings.p
-        guard p.spoilerEnabled else { return }
 
         var over = false
         if let pointer = store.pointer, textFrame.width > 0, store.hasContent || store.editMode {
-            over = textFrame.insetBy(dx: -16, dy: -12).contains(pointer)
+            over = viewport.insetBy(dx: -16, dy: -12).contains(pointer)
+                && textFrame.insetBy(dx: -16, dy: -12).contains(pointer)
         }
 
+        // Overflowing text can be scrolled while hovered; that needs the panel to take mouse events.
+        let capture = p.allowScrollBack && overflow && over
+        if store.wantsMouse != capture { store.wantsMouse = capture }
+
+        // Cursor moved away: jump back to the newest text.
+        if pointerWasOverText, !over, overflow, scrollOffset < maxScroll - 3 {
+            animateScroll(to: maxScroll, duration: 0.35)
+        }
+        pointerWasOverText = over
+
+        guard p.spoilerEnabled else { return }
         if over, let pointer = store.pointer {
             hideTask?.cancel()
             hideTask = nil
@@ -223,9 +331,11 @@ struct CaptionView: View {
 
     /// Radius that reaches the farthest corner of the text from the reveal origin.
     private func fullRadius() -> CGFloat {
+        let visible = textFrame.intersection(viewport)
+        let area = visible.isNull || visible.isEmpty ? textFrame : visible
         let corners = [
-            CGPoint(x: textFrame.minX, y: textFrame.minY), CGPoint(x: textFrame.maxX, y: textFrame.minY),
-            CGPoint(x: textFrame.minX, y: textFrame.maxY), CGPoint(x: textFrame.maxX, y: textFrame.maxY),
+            CGPoint(x: area.minX, y: area.minY), CGPoint(x: area.maxX, y: area.minY),
+            CGPoint(x: area.minX, y: area.maxY), CGPoint(x: area.maxX, y: area.maxY),
         ]
         let farthest = corners.map { hypot($0.x - revealOrigin.x, $0.y - revealOrigin.y) }.max() ?? 0
         return farthest + 28

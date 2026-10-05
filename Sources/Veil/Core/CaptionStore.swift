@@ -35,6 +35,9 @@ final class CaptionStore: ObservableObject {
     /// Pointer position in widget coordinates (origin top-left), nil when outside the widget.
     @Published var pointer: CGPoint?
     @Published var editMode = false
+    /// True while the pointer is over text that overflows the widget and can be scrolled: the panel then
+    /// stops being click-through so the scroll wheel reaches it.
+    @Published var wantsMouse = false
 
     /// Retention rules are injected by the model whenever settings change.
     var retention: TimeInterval = 14

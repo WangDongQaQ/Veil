@@ -16,20 +16,24 @@ struct EditOverlay: View {
 
             WindowDragSurface()
 
+            // Bottom bar: text now starts at the top-left, so nothing interactive may sit up there.
             VStack {
-                HStack {
-                    Spacer()
+                Spacer()
+                HStack(spacing: 10) {
+                    Text("拖动移动  ·  拖拽四角调整大小")
+                        .font(.caption)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                    Spacer(minLength: 4)
                     Button("完成", action: onDone)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                 }
-                Spacer()
-                Text("拖动移动  ·  拖拽四角调整大小")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .shadow(color: .black.opacity(0.5), radius: 2)
+                .padding(.horizontal, 38)
+                .padding(.bottom, 10)
             }
-            .padding(12)
 
             grip(.topLeft, .topLeading)
             grip(.topRight, .topTrailing)

@@ -126,9 +126,9 @@ enum TextAlignChoice: String, Codable, CaseIterable, Identifiable {
 }
 
 enum TextAnchorChoice: String, Codable, CaseIterable, Identifiable {
-    case bottom, top
+    case top, bottom
     var id: String { rawValue }
-    var title: String { self == .bottom ? "贴着底部（新字在下方）" : "贴着顶部" }
+    var title: String { self == .top ? "贴着左上角（从上往下排）" : "贴着底部（新字在下方）" }
 }
 
 enum TextTone: String, Codable, CaseIterable, Identifiable {
@@ -215,7 +215,8 @@ struct Preferences: Codable, Equatable {
     var tone: TextTone = .universal
     var textColor: RGBAColor = .white          // only used when tone == .custom
     var textAlign: TextAlignChoice = .leading
-    var textAnchor: TextAnchorChoice = .bottom
+    var textAnchor: TextAnchorChoice = .top
+    var allowScrollBack: Bool = true           // 文字超出显示区域时，悬停可上下翻阅
     var textShadow: Bool = true
     var background: CaptionBackground = .none
     var retentionSeconds: Double = 14          // 0 = 不自动清除
@@ -239,6 +240,9 @@ struct Preferences: Codable, Equatable {
 
     // 引导
     var hasCompletedFirstRun: Bool = false
+    /// Bumped when a default changes in a way existing users should also get.
+    ///  2: captions start at the top-left instead of the bottom.
+    var schemaVersion: Int = 2
 
     static func defaultLanguageID() -> String {
         let preferred = Locale.preferredLanguages
@@ -306,6 +310,11 @@ extension Preferences {
                 merged = trial
             }
         }
+        // One-time migrations.
+        let storedVersion = stored["schemaVersion"] as? Int ?? 1
+        if storedVersion < 2 { merged["textAnchor"] = TextAnchorChoice.top.rawValue }
+        merged["schemaVersion"] = Preferences().schemaVersion
+
         guard let d = try? JSONSerialization.data(withJSONObject: merged),
               let prefs = try? JSONDecoder().decode(Preferences.self, from: d) else { return Preferences() }
         return prefs

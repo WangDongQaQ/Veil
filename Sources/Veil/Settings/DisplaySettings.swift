@@ -47,6 +47,14 @@ struct AppearanceSettings: View {
             }
 
             Section {
+                Toggle("悬停时可上下滚动翻阅超出的文字", isOn: $settings.p.allowScrollBack)
+            } header: {
+                Text("文字超出显示框时")
+            } footer: {
+                Text("文字多到放不下时，会自动滚到最新内容，旧内容在顶部渐隐。开启后，把光标放在文字上就能用滚轮或触控板翻阅，移开后自动回到最新；翻阅时该区域的鼠标点击不会穿透到下面的窗口。关闭则只显示最新内容。")
+            }
+
+            Section {
                 Picker("文字停留", selection: $settings.p.retentionSeconds) {
                     ForEach(Self.retentionChoices, id: \.self) { value in
                         Text(value == 0 ? "不自动清除" : "\(Int(value)) 秒").tag(value)

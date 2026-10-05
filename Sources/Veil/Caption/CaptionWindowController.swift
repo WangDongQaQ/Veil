@@ -53,9 +53,10 @@ final class CaptionWindowController {
             .sink { [weak self] _ in if let self { self.apply(self.settings.p) } }
             .store(in: &cancellables)
 
-        store.$editMode
-            .sink { [weak self] editing in
-                self?.panel.ignoresMouseEvents = !editing
+        // Click-through unless editing, or hovering overflowing text that can be scrolled.
+        Publishers.CombineLatest(store.$editMode, store.$wantsMouse)
+            .sink { [weak self] editing, wantsMouse in
+                self?.panel.ignoresMouseEvents = !(editing || wantsMouse)
                 self?.updatePolling()
             }
             .store(in: &cancellables)
