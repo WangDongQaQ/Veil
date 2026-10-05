@@ -15,8 +15,8 @@ final class VoiceGate {
     }
 
     let sampleRate = 16_000.0
-    private let minThreshold: Float
-    private let endSilence: Double
+    private var minThreshold: Float
+    private var endSilence: Double
     private let maxUtterance: Double
     private let prerollSamples = 4_800
 
@@ -42,6 +42,12 @@ final class VoiceGate {
 
     /// Decisions are made on 20 ms frames regardless of how large the incoming buffers are
     /// (a Bluetooth headset hands over 128 ms at a time; one click would otherwise look like speech).
+    /// Applies new tuning immediately, without disturbing an utterance in progress.
+    func update(sensitivity: Double, endSilence: Double) {
+        minThreshold = Float(0.002 + (1 - min(max(sensitivity, 0), 1)) * 0.016)
+        self.endSilence = endSilence
+    }
+
     func process(_ chunk: [Float]) -> [Event] {
         carry.append(contentsOf: chunk)
         var events: [Event] = []

@@ -21,6 +21,12 @@ protocol TranscriptionEngine: AnyObject, Sendable {
     /// Called on the audio thread with raw microphone buffers, in the device's native format.
     func feed(_ buffer: AVAudioPCMBuffer)
     func stop() async
+    /// Pause length / sensitivity can be tuned while running. Engines without a voice gate ignore it.
+    func updateVoiceGate(sensitivity: Double, endSilence: Double)
+}
+
+extension TranscriptionEngine {
+    func updateVoiceGate(sensitivity: Double, endSilence: Double) {}
 }
 
 enum EngineError: LocalizedError {

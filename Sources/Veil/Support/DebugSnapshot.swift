@@ -73,6 +73,75 @@ enum DebugSnapshot {
         }
     }
 
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() { lock.lock(); value += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
+    private final class ProbeLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private let start = Date()
+        private let path: String
+        private var lines: [String] = []
+        init(path: String) { self.path = path }
+        func write(_ text: String) {
+            lock.lock(); defer { lock.unlock() }
+            lines.append(String(format: "%6.2fs  ", Date().timeIntervalSince(start)) + text)
+            try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        var elapsed: Double { Date().timeIntervalSince(start) }
+    }
+
+    /// `VEIL_MIC_PROBE=20 VEIL_MIC_PROBE_DEVICE=BuiltInMicrophoneDevice VEIL_PROBE_LOG=/tmp/x.log`:
+    /// runs the real capture for N seconds, mirroring AppModel's restart-on-route-change handling, and logs how
+    /// often the audio engine reports a configuration change. Counts buffers only — no audio is kept.
+    /// Returns true when it took over launch (the UI should not start).
+    static func micProbeIfRequested() -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        guard let seconds = env["VEIL_MIC_PROBE"].flatMap(Double.init) else { return false }
+        let log = ProbeLog(path: env["VEIL_PROBE_LOG"] ?? "/tmp/veil-probe.log")
+        let device = env["VEIL_MIC_PROBE_DEVICE"].flatMap { $0.isEmpty ? nil : $0 }
+        let restartOnChange = env["VEIL_PROBE_NO_RESTART"] == nil
+
+        Task.detached {
+            guard await AudioCapture.requestAccess() else {
+                log.write("microphone access denied")
+                await MainActor.run { NSApp.terminate(nil) }
+                return
+            }
+            let capture = AudioCapture()
+            let buffers = Counter()
+            let changes = Counter()
+            capture.onBuffer = { _ in buffers.increment() }
+            capture.onRouteChange = {
+                changes.increment()
+                log.write("AVAudioEngineConfigurationChange #\(changes.count)")
+                if restartOnChange {
+                    do { try capture.start(deviceUID: device); log.write("  restarted capture") }
+                    catch { log.write("  restart failed: \(error.localizedDescription)") }
+                }
+            }
+            do { try capture.start(deviceUID: device); log.write("capture started (device: \(device ?? "system default"))") }
+            catch {
+                log.write("start failed: \(error.localizedDescription)")
+                await MainActor.run { NSApp.terminate(nil) }
+                return
+            }
+            var tick = 0
+            while log.elapsed < seconds {
+                try? await Task.sleep(for: .seconds(1))
+                tick += 1
+                if tick % 5 == 0 { log.write("buffers=\(buffers.count) configChanges=\(changes.count)") }
+            }
+            capture.stop()
+            log.write("DONE buffers=\(buffers.count) configChanges=\(changes.count)")
+            await MainActor.run { NSApp.terminate(nil) }
+        }
+        return true
+    }
+
     static func runIfRequested(model: AppModel) {
         feedFileIfRequested(model: model)
         guard let dir = ProcessInfo.processInfo.environment["VEIL_SNAPSHOT_DIR"] else { return }

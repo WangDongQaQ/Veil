@@ -16,6 +16,7 @@ enum CaptureError: LocalizedError {
 final class AudioCapture: @unchecked Sendable {
     private var engine = AVAudioEngine()
     private var configObserver: NSObjectProtocol?
+    private var tapFormat: AVAudioFormat?
     private(set) var isRunning = false
 
     /// Audio thread.
@@ -50,6 +51,7 @@ final class AudioCapture: @unchecked Sendable {
 
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw CaptureError.noInput }
+        tapFormat = format
 
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
             guard let self else { return }
@@ -63,7 +65,20 @@ final class AudioCapture: @unchecked Sendable {
 
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in self?.onRouteChange?() }
+        ) { [weak self] _ in self?.engineConfigurationChanged() }
+    }
+
+    /// AVAudioEngine also posts this when *we* just pointed its I/O unit at a specific microphone, and again
+    /// after any restart. Rebuilding the engine on every one of those makes a self-sustaining loop (the microphone
+    /// indicator flickers several times a second and no audio gets through), so only react to real changes:
+    /// the engine stopped, or the input format is no longer the one the tap was installed with.
+    private func engineConfigurationChanged() {
+        guard isRunning else { return }
+        if engine.isRunning, let tapFormat {
+            let now = engine.inputNode.outputFormat(forBus: 0)
+            if now.sampleRate == tapFormat.sampleRate, now.channelCount == tapFormat.channelCount { return }
+        }
+        onRouteChange?()
     }
 
     func stop() {

@@ -66,6 +66,16 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in self?.applyRetention() }
             .store(in: &cancellables)
 
+        // Pause length and sensitivity only tune the voice gate: apply them live, never restart the microphone.
+        settings.$p
+            .map { GateTuning(sensitivity: $0.apiSensitivity, endSilence: $0.apiEndSilence) }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] tuning in
+                self?.engine?.updateVoiceGate(sensitivity: tuning.sensitivity, endSilence: tuning.endSilence)
+            }
+            .store(in: &cancellables)
+
         // Restart the engine when anything that affects recognition changes (debounced while typing).
         settings.$p
             .map(RecognitionKey.init)
@@ -191,8 +201,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var routeChangeTimes: [Date] = []
+
     private func audioRouteChanged() {
         guard isListening else { return }
+        // Safety net: if the route keeps changing, stop instead of flickering the microphone on and off.
+        let now = Date()
+        routeChangeTimes = routeChangeTimes.filter { now.timeIntervalSince($0) < 10 } + [now]
+        if routeChangeTimes.count > 3 {
+            stopListening()
+            state = .failed("麦克风配置在反复变化，已自动暂停。请检查输入设备后重新开始听写。")
+            return
+        }
         do { try capture.start(deviceUID: settings.p.inputDeviceUID) }
         catch { state = .failed(error.localizedDescription) }
     }
@@ -284,8 +304,6 @@ private struct RecognitionKey: Equatable {
     var prompt: String
     var autoLanguage: Bool
     var livePreview: Bool
-    var endSilence: Double
-    var sensitivity: Double
     var keyRevision: Int
     var device: String?
     var doubaoResource: String
@@ -301,8 +319,6 @@ private struct RecognitionKey: Equatable {
         prompt = p.apiPrompt
         autoLanguage = p.apiAutoLanguage
         livePreview = p.apiLivePreview
-        endSilence = p.apiEndSilence
-        sensitivity = p.apiSensitivity
         keyRevision = p.apiKeyRevision
         device = p.inputDeviceUID
         doubaoResource = p.doubaoResourceID
@@ -310,4 +326,9 @@ private struct RecognitionKey: Equatable {
         doubaoLimit = p.doubaoDailyLimitMinutes
         doubaoFallback = p.doubaoFallbackToApple
     }
+}
+
+private struct GateTuning: Equatable {
+    var sensitivity: Double
+    var endSilence: Double
 }

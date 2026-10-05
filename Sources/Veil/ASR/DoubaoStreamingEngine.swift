@@ -58,6 +58,10 @@ final class DoubaoStreamingEngine: TranscriptionEngine, @unchecked Sendable {
         queue.async { [self] in process(samples) }
     }
 
+    func updateVoiceGate(sensitivity: Double, endSilence: Double) {
+        queue.async { [self] in gate.update(sensitivity: sensitivity, endSilence: endSilence) }
+    }
+
     func stop() async {
         queue.sync {
             for event in gate.flush() { if case .ended = event { endUtterance() } }

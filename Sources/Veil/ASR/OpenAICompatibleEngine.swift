@@ -145,6 +145,10 @@ final class OpenAICompatibleEngine: TranscriptionEngine, @unchecked Sendable {
         queue.async { [self] in process(samples) }
     }
 
+    func updateVoiceGate(sensitivity: Double, endSilence: Double) {
+        queue.async { [self] in gate.update(sensitivity: sensitivity, endSilence: endSilence) }
+    }
+
     func stop() async {
         queue.sync {
             for case .ended(let voiced) in gate.flush() { finishUtterance(voiced: voiced) }

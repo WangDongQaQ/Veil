@@ -21,6 +21,7 @@ struct VeilApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)      // menu bar only; also set through LSUIElement
+        if DebugSnapshot.micProbeIfRequested() { return }
         AppModel.shared.bootstrap()
     }
 

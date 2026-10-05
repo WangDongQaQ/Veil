@@ -95,4 +95,10 @@ say -o speech.aiff "你好，下午的会议改到三点了"
 VEIL_FEED_FILE=speech.aiff VEIL_FEED_LANG=zh-CN build/Veil.app/Contents/MacOS/Veil
 ```
 
-这两个模式使用独立的临时偏好域，不会改动真实设置。
+```bash
+# 麦克风探针：跑真实采集 N 秒，统计音频引擎「配置变化」次数（只计数，不保存音频）
+open -n --env VEIL_MIC_PROBE=20 --env VEIL_MIC_PROBE_DEVICE=BuiltInMicrophoneDevice \
+  --env VEIL_PROBE_LOG=/tmp/probe.log build/Veil.app && cat /tmp/probe.log
+```
+
+这些模式使用独立的临时偏好域，不会改动真实设置。
