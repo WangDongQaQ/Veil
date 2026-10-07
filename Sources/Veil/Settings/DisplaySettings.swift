@@ -10,7 +10,8 @@ struct AppearanceSettings: View {
 
     var body: some View {
         Form {
-            Section("文字") {
+            Section {
+                TextPreview(prefs: settings.p)
                 Picker("字体", selection: $settings.p.fontDesign) {
                     ForEach(FontDesignChoice.allCases) { Text($0.title).tag($0) }
                 }
@@ -24,17 +25,34 @@ struct AppearanceSettings: View {
                             .monospacedDigit().foregroundStyle(.secondary).frame(width: 46, alignment: .trailing)
                     }
                 }
-                Picker("配色", selection: $settings.p.tone) {
+                Picker("颜色", selection: $settings.p.tone) {
                     ForEach(TextTone.allCases) { Text($0.title).tag($0) }
                 }
+                .pickerStyle(.segmented)
                 if settings.p.tone == .custom {
-                    ColorPicker("颜色", selection: ColorBinding.make($settings.p.textColor), supportsOpacity: true)
+                    ColorPicker("自定义颜色", selection: ColorBinding.make($settings.p.textColor), supportsOpacity: true)
+                }
+                Picker("描边", selection: $settings.p.outlineStyle) {
+                    ForEach(OutlineStyle.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if settings.p.outlineStyle == .crisp {
+                    LabeledContent("描边粗细") {
+                        HStack(spacing: 6) {
+                            Text("细").foregroundStyle(.secondary)
+                            Slider(value: $settings.p.outlineStrength, in: 0...1).frame(width: 170)
+                            Text("粗").foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Picker("对齐", selection: $settings.p.textAlign) {
                     ForEach(TextAlignChoice.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                Toggle("文字描边（让文字在任何背景上都清晰）", isOn: $settings.p.textShadow)
+            } header: {
+                Text("文字")
+            } footer: {
+                Text("描边用与文字相反的颜色（白字配深边、深字配浅边）。「清晰描边」在白底、黑底和壁纸上都能读，「柔和阴影」更含蓄，适合深色背景。上面的预览与桌面上的渲染完全一致。")
             }
 
             Section("版面") {
@@ -118,7 +136,7 @@ struct SpoilerSettings: View {
                     LabeledContent("浓淡") {
                         HStack(spacing: 6) {
                             Text("淡").foregroundStyle(.secondary)
-                            Slider(value: $settings.p.dustIntensity, in: 0.1...1).frame(width: 170)
+                            Slider(value: $settings.p.dustIntensity, in: 0...1).frame(width: 170)
                             Text("浓").foregroundStyle(.secondary)
                         }
                     }
@@ -223,7 +241,7 @@ private struct SpoilerPreview: View {
             .multilineTextAlignment(.leading)
         return ZStack(alignment: .bottomTrailing) {
             RoundedRectangle(cornerRadius: 10, style: .continuous).fill(background)
-            DustField(color: palette.dust, halo: palette.dustHalo, wash: palette.dustWash,
+            DustField(color: palette.dust, halo: palette.dustHalo, wash: palette.dustWash, lightWash: palette.dustLightWash,
                       density: prefs.dustDensity, speed: prefs.dustSpeed, intensity: prefs.dustIntensity,
                       paused: reduceMotion)
                 .mask(alignment: .topLeading) {
@@ -241,6 +259,45 @@ private struct SpoilerPreview: View {
                 .padding(7)
         }
         .frame(height: 86)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
+    }
+}
+
+
+// MARK: - Live text preview
+
+/// The *revealed* caption text on a white, a light-grey and a dark backdrop, drawn by the same code as the widget.
+private struct TextPreview: View {
+    let prefs: Preferences
+
+    private var runs: [CaptionStore.Run] {
+        [.init(id: 0, text: "你好 Hello", alpha: 1)]
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            swatch(Color.white, "白底")
+            swatch(Color(white: 0.86), "浅灰")
+            swatch(Color(white: 0.12), "深色")
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func swatch(_ background: Color, _ caption: String) -> some View {
+        var p = prefs
+        p.fontSize = min(max(prefs.fontSize, 15), 20)          // keep three swatches legible side by side
+        return ZStack(alignment: .bottomTrailing) {
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(background)
+            CaptionText.outlined(runs, p)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            Text(caption)
+                .font(.caption2)
+                .foregroundStyle(background == Color(white: 0.12) ? Color.white.opacity(0.4) : Color.black.opacity(0.35))
+                .padding(6)
+        }
+        .frame(height: 58)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
     }

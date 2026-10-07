@@ -98,6 +98,68 @@ enum DebugSnapshot {
         var count: Int { lock.lock(); defer { lock.unlock() }; return value }
     }
 
+    /// `VEIL_STYLE_LAB=/path/board.png` renders text-style variants over several backdrops and exits.
+    @MainActor
+    static func styleLabIfRequested() -> Bool {
+        guard let path = ProcessInfo.processInfo.environment["VEIL_STYLE_LAB"] else { return false }
+        var base = Preferences()
+        base.fontSize = ProcessInfo.processInfo.environment["VEIL_LAB_FONT"].flatMap(Double.init) ?? 24
+        let runs = [CaptionStore.Run(id: 0, text: "你好，下午的会议改到三点了 Hello", alpha: 1)]
+
+        struct Variant { let name: String; let make: (Preferences) -> AnyView }
+        func crisp(_ t: OutlineTuning) -> (Preferences) -> AnyView {
+            { p in AnyView(CaptionText.outlined(runs, p, tuning: t)) }
+        }
+        var soft = base; soft.outlineStyle = .soft
+        var dark = base; dark.tone = .dark; dark.outlineStyle = .crisp
+        var darkNone = base; darkNone.tone = .dark; darkNone.outlineStyle = .none
+        let variants: [(String, Preferences, OutlineTuning?)] = [
+            ("A current: w1.0 a.88 shadow.26", base, .standard),
+            ("B thinner: w.8 a.78 shadow.16", base, OutlineTuning(widthPerPoint: 0.032, minWidth: 0.7, maxWidth: 1.3, alpha: 0.78, shadowAlpha: 0.16, shadowRadius: 3, shadowY: 1)),
+            ("C tight+deep: w.9 a.95 shadow.0", base, OutlineTuning(widthPerPoint: 0.036, minWidth: 0.8, maxWidth: 1.4, alpha: 0.95, shadowAlpha: 0, shadowRadius: 0, shadowY: 0)),
+            ("D lifted: w.8 a.7 shadow .30 r6 y2", base, OutlineTuning(widthPerPoint: 0.032, minWidth: 0.7, maxWidth: 1.3, alpha: 0.7, shadowAlpha: 0.30, shadowRadius: 6, shadowY: 2)),
+            ("E soft shadow (old look)", soft, nil),
+            ("F dark text + light edge", dark, .standard),
+            ("G dark text, no edge", darkNone, nil),
+        ]
+        let backdrops: [(String, AnyShapeStyle)] = [
+            ("white", AnyShapeStyle(Color.white)),
+            ("#E8E8ED", AnyShapeStyle(Color(red: 0.91, green: 0.91, blue: 0.93))),
+            ("mid grey", AnyShapeStyle(Color(red: 0.55, green: 0.56, blue: 0.60))),
+            ("dark", AnyShapeStyle(Color(red: 0.11, green: 0.11, blue: 0.12))),
+            ("wallpaper", AnyShapeStyle(LinearGradient(colors: [Color(red: 0.95, green: 0.78, blue: 0.55), Color(red: 0.40, green: 0.62, blue: 0.85), Color(red: 0.95, green: 0.92, blue: 0.85)], startPoint: .topLeading, endPoint: .bottomTrailing))),
+        ]
+        let board = VStack(alignment: .leading, spacing: 4) {
+            ForEach(variants.indices, id: \.self) { i in
+                let (name, prefs, tuning) = variants[i]
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name).font(.system(size: 11, weight: .semibold)).foregroundStyle(.black)
+                    HStack(spacing: 4) {
+                        ForEach(backdrops.indices, id: \.self) { j in
+                            ZStack(alignment: .leading) {
+                                Rectangle().fill(backdrops[j].1)
+                                if let tuning { CaptionText.outlined(runs, prefs, tuning: tuning).padding(.leading, 10) }
+                                else { CaptionText.outlined(runs, prefs).padding(.leading, 10) }
+                            }
+                            .frame(width: 330, height: 54)
+                            .clipped()
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(white: 0.8))
+        let renderer = ImageRenderer(content: board)
+        renderer.scale = 2
+        if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: path))
+        }
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+        return true
+    }
+
     private final class ProbeLog: @unchecked Sendable {
         private let lock = NSLock()
         private let start = Date()
@@ -184,6 +246,17 @@ enum DebugSnapshot {
             controller.debugPointer = CGPoint(x: -2000, y: -2000)     // keep the real mouse out of the test
             model.store.editMode = false
             model.store.retention = 0
+            if ProcessInfo.processInfo.environment["VEIL_SNAPSHOT_QUICK"] != nil {
+                model.store.apply(TranscriptEvent(kind: .final, text: "你好，下午的会议改到三点了，你方便吗？"))
+                model.store.apply(TranscriptEvent(kind: .final, text: "Another line in English to check the outline."))
+                try? await Task.sleep(for: .seconds(0.8))
+                save(panel, to: "\(dir)/q-hidden.png")
+                controller.debugPointer = CGPoint(x: 140, y: 40)
+                try? await Task.sleep(for: .seconds(1.3))
+                save(panel, to: "\(dir)/q-revealed.png")
+                NSApp.terminate(nil)
+                return
+            }
 
             model.store.apply(TranscriptEvent(kind: .final, text: "你好，下午的会议改到三点了，你方便吗？"))
             model.store.apply(TranscriptEvent(kind: .final, text: "另外上次提到的那个方案，我已经发给你了。"))
@@ -300,10 +373,17 @@ enum DebugSnapshot {
         let image = NSImage(size: size)
         image.lockFocus()
         let backdrop = ProcessInfo.processInfo.environment["VEIL_SNAPSHOT_BG"]
+        func hexColor(_ text: String?) -> NSColor? {
+            guard let text, text.hasPrefix("#"), text.count == 7, let v = Int(text.dropFirst(), radix: 16) else { return nil }
+            return NSColor(calibratedRed: CGFloat(v >> 16 & 255) / 255, green: CGFloat(v >> 8 & 255) / 255,
+                           blue: CGFloat(v & 255) / 255, alpha: 1)
+        }
         if !opaque, backdrop == "white" {
             NSColor.white.setFill(); NSRect(origin: .zero, size: size).fill()
         } else if !opaque, backdrop == "black" {
             NSColor.black.setFill(); NSRect(origin: .zero, size: size).fill()
+        } else if !opaque, let color = hexColor(backdrop) {
+            color.setFill(); NSRect(origin: .zero, size: size).fill()
         } else if !opaque {
             NSGradient(colors: [NSColor(calibratedRed: 0.22, green: 0.32, blue: 0.52, alpha: 1),
                                 NSColor(calibratedRed: 0.52, green: 0.38, blue: 0.48, alpha: 1)])?

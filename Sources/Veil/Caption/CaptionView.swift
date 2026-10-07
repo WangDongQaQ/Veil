@@ -170,21 +170,26 @@ struct CaptionView: View {
     private func textBlock(runs: [CaptionStore.Run], _ p: Preferences) -> some View {
         let plain = runs.map(\.text).joined()
         let palette = p.palette
-        let real = styledText(runs, p, color: palette.text)
-            .modifier(TextHalo(color: palette.halo, enabled: p.textShadow, strong: palette.strongOutline))
         let origin = localOrigin()
+        // Lays the text out (and gives the overlays their size) without painting anything.
+        let sizer = CaptionText.styled(runs, p, color: .clear)
 
         Group {
             if p.spoilerEnabled {
-                real
-                    .mask { revealCircle(origin: origin) }
+                sizer
                     .overlay {
-                        DustField(color: palette.dust, halo: palette.dustHalo, wash: palette.dustWash,
+                        // The outlined copies are only built while the veil is (partly) lifted.
+                        if revealRadius > 0.5 {
+                            CaptionText.outlined(runs, p).mask { revealCircle(origin: origin) }
+                        }
+                    }
+                    .overlay {
+                        DustField(color: palette.dust, halo: palette.dustHalo, wash: palette.dustWash, lightWash: palette.dustLightWash,
                                   density: p.dustDensity, speed: p.dustSpeed, intensity: p.dustIntensity,
                                   paused: reduceMotion || (fullyRevealed && p.revealMode == .block))
                             .mask {
                                 ZStack {
-                                    softenedGlyphs(runs, p)
+                                    CaptionText.softenedGlyphs(runs, p)
                                     revealCircle(origin: origin).blendMode(.destinationOut)
                                 }
                                 .compositingGroup()
@@ -192,7 +197,7 @@ struct CaptionView: View {
                             .opacity(fullyRevealed && p.revealMode == .block ? 0 : 1)
                     }
             } else {
-                real
+                CaptionText.outlined(runs, p)
             }
         }
         .background {
@@ -206,31 +211,6 @@ struct CaptionView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("实时字幕")
         .accessibilityValue(plain)
-    }
-
-    /// Glyph shapes smeared a little, so the hidden text can't be read from the dust's silhouette.
-    private func softenedGlyphs(_ runs: [CaptionStore.Run], _ p: Preferences) -> some View {
-        let radius = max(2.5, p.fontSize * 0.09)
-        let glyphs = styledText(runs, p, color: .white)
-        return ZStack {
-            glyphs.blur(radius: radius)
-            glyphs.blur(radius: radius * 0.5)
-            glyphs
-        }
-    }
-
-    private func styledText(_ runs: [CaptionStore.Run], _ p: Preferences, color: Color) -> some View {
-        var attributed = AttributedString()
-        for run in runs {
-            var piece = AttributedString(run.text)
-            piece.foregroundColor = color.opacity(run.alpha)
-            attributed += piece
-        }
-        return Text(attributed)
-            .font(.system(size: p.fontSize, weight: p.fontWeight.weight, design: p.fontDesign.design))
-            .multilineTextAlignment(p.textAlign.alignment)
-            .lineSpacing(p.fontSize * 0.14)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -339,27 +319,5 @@ struct CaptionView: View {
         ]
         let farthest = corners.map { hypot($0.x - revealOrigin.x, $0.y - revealOrigin.y) }.max() ?? 0
         return farthest + 28
-    }
-}
-
-
-/// Opposite-tone outline / shadow around the glyphs.
-private struct TextHalo: ViewModifier {
-    var color: Color
-    var enabled: Bool
-    var strong: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if !enabled {
-            content
-        } else if strong {
-            content
-                .shadow(color: color.opacity(0.95), radius: 0.7, x: 0, y: 0)
-                .shadow(color: color.opacity(0.85), radius: 1.5, x: 0, y: 0.5)
-                .shadow(color: color.opacity(0.45), radius: 4, x: 0, y: 1.5)
-        } else {
-            content.shadow(color: color.opacity(0.6), radius: 3, x: 0, y: 1)
-        }
     }
 }

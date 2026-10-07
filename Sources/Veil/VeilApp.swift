@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)      // menu bar only; also set through LSUIElement
         if DebugSnapshot.micProbeIfRequested() { return }
+        if DebugSnapshot.styleLabIfRequested() { return }
         AppModel.shared.bootstrap()
     }
 
@@ -85,12 +86,11 @@ private struct MenuContent: View {
         Button("清除字幕") { model.clearCaptions() }
             .disabled(!store.hasContent)
 
-        Menu("文字配色") {
-            Picker("文字配色", selection: Binding(get: { model.settings.p.tone },
+        Menu("文字颜色") {
+            Picker("文字颜色", selection: Binding(get: { model.settings.p.tone },
                                                 set: { model.settings.p.tone = $0 })) {
-                Text("通用（任何背景）").tag(TextTone.universal)
-                Text("浅色字（深色背景）").tag(TextTone.light)
-                Text("深色字（浅色背景）").tag(TextTone.dark)
+                Text("白色字").tag(TextTone.light)
+                Text("深色字").tag(TextTone.dark)
                 if model.settings.p.tone == .custom { Text("自定义").tag(TextTone.custom) }
             }
             .pickerStyle(.inline)

@@ -7,8 +7,9 @@ struct DustField: View {
     var color: Color
     /// Opposite-tone twin drawn just behind every speck, so the dust reads on light and dark backdrops alike.
     var halo: Color
-    /// Faint constant wash under the specks.
+    /// Faint constant washes under the specks: dark (shows on light backdrops) and light (shows on dark ones).
     var wash: Color
+    var lightWash: Color
     var density: Double      // 0…1
     var speed: Double        // 0…1
     /// 0…1: overall strength of specks, halo and wash. Low = just a hint that something is there.
@@ -20,7 +21,7 @@ struct DustField: View {
         TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: paused)) { timeline in
             Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, size in
                 Self.draw(&context, size: size, time: timeline.date.timeIntervalSinceReferenceDate,
-                          tiles: tiles, color: color, halo: halo, wash: wash, speed: speed, intensity: intensity)
+                          tiles: tiles, color: color, halo: halo, wash: wash, lightWash: lightWash, speed: speed, intensity: intensity)
             }
         }
         .allowsHitTesting(false)
@@ -45,13 +46,16 @@ struct DustField: View {
     ]
 
     private static func draw(_ context: inout GraphicsContext, size: CGSize, time t: Double,
-                             tiles: [CGImage], color: Color, halo: Color, wash: Color, speed: Double, intensity: Double) {
+                             tiles: [CGImage], color: Color, halo: Color, wash: Color, lightWash: Color, speed: Double, intensity: Double) {
         guard size.width > 1, size.height > 1 else { return }
         let motion = 0.2 + speed * 1.2
-        let k = min(1, max(0.04, intensity))
+        // The slider's lowest position is still a clearly visible veil (it used to fade to nothing).
+        let k = 0.22 + 0.78 * min(1, max(0, intensity))
 
-        // A faint, constant wash: gives the glyph silhouettes a body on the backdrop.
-        context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(wash.opacity(0.16 * k)))
+        // Faint, constant washes: give the glyph silhouettes a body on light and on dark backdrops alike.
+        let whole = Path(CGRect(origin: .zero, size: size))
+        context.fill(whole, with: .color(wash.opacity(0.20 * k)))
+        context.fill(whole, with: .color(lightWash.opacity(0.11 * k)))
 
         for (index, layer) in layers.enumerated() {
             var image = context.resolve(Image(decorative: tiles[index % tiles.count], scale: 2).renderingMode(.template))
@@ -92,7 +96,7 @@ private enum DustTiles {
         let step = Int((min(max(density, 0), 1) * 10).rounded())
         lock.lock(); defer { lock.unlock() }
         if let cached = cache[step] { return cached }
-        let fraction = 0.045 + Double(step) / 10 * 0.22        // share of pixels that carry a speck
+        let fraction = 0.11 + Double(step) / 10 * 0.17         // share of pixels that carry a speck
         let tiles = (0..<3).map { make(fraction: fraction, seed: UInt64($0 + 1) &* 7919) }
         cache[step] = tiles
         return tiles

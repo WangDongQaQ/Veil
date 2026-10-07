@@ -131,15 +131,28 @@ enum TextAnchorChoice: String, Codable, CaseIterable, Identifiable {
     var title: String { self == .top ? "贴着左上角（从上往下排）" : "贴着底部（新字在下方）" }
 }
 
+/// Text color. How it is kept readable on any backdrop is a separate choice: `OutlineStyle`.
 enum TextTone: String, Codable, CaseIterable, Identifiable {
-    case universal, light, dark, custom
+    case light, dark, custom
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .universal: "通用（白字深色描边，任何背景都清晰）"
-        case .light: "浅色字（适合深色背景）"
-        case .dark: "深色字（适合浅色背景）"
-        case .custom: "自定义颜色"
+        case .light: "白色字"
+        case .dark: "深色字"
+        case .custom: "自定义"
+        }
+    }
+}
+
+/// The edge treatment around the glyphs, in the color opposite to the text (dark for light text and vice versa).
+enum OutlineStyle: String, Codable, CaseIterable, Identifiable {
+    case none, soft, crisp
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .none: "无"
+        case .soft: "柔和阴影"
+        case .crisp: "清晰描边"
         }
     }
 }
@@ -212,12 +225,13 @@ struct Preferences: Codable, Equatable {
     var fontDesign: FontDesignChoice = .rounded
     var fontWeight: FontWeightChoice = .medium
     var fontSize: Double = 26
-    var tone: TextTone = .universal
+    var tone: TextTone = .light
     var textColor: RGBAColor = .white          // only used when tone == .custom
+    var outlineStyle: OutlineStyle = .crisp
+    var outlineStrength: Double = 0.5          // 0…1 清晰描边的粗细；0.5 = 默认
     var textAlign: TextAlignChoice = .leading
     var textAnchor: TextAnchorChoice = .top
     var allowScrollBack: Bool = true           // 文字超出显示区域时，悬停可上下翻阅
-    var textShadow: Bool = true
     var background: CaptionBackground = .none
     var retentionSeconds: Double = 14          // 0 = 不自动清除
     var maxCharacters: Int = 240
@@ -229,7 +243,7 @@ struct Preferences: Codable, Equatable {
     var hideDelay: Double = 0.5
     var dustDensity: Double = 0.55             // 0…1
     var dustSpeed: Double = 0.5                // 0…1
-    var dustIntensity: Double = 0.4            // 0…1 浓淡：颗粒、描边、底雾的整体强度
+    var dustIntensity: Double = 0.3            // 0…1 浓淡：颗粒、描边、底雾的整体强度
     var dustUsesTextColor: Bool = true
     var dustColor: RGBAColor = .white
 
@@ -242,7 +256,8 @@ struct Preferences: Codable, Equatable {
     var hasCompletedFirstRun: Bool = false
     /// Bumped when a default changes in a way existing users should also get.
     ///  2: captions start at the top-left instead of the bottom.
-    var schemaVersion: Int = 2
+    ///  3: text color and outline are separate settings (the old "universal" tone = white text + crisp outline).
+    var schemaVersion: Int = 3
 
     static func defaultLanguageID() -> String {
         let preferred = Locale.preferredLanguages
@@ -260,36 +275,45 @@ struct Preferences: Codable, Equatable {
     var apiPreset: APIPreset { APIPreset.all.first { $0.id == apiPresetID } ?? APIPreset.all[0] }
 }
 
-/// Colors for the text and its dust. Every color carries an opposite-tone halo, so text and dust stay
-/// visible whether the desktop behind the widget is white, black or a busy wallpaper.
+/// Colors for the text and its dust. Everything is paired with an opposite-tone twin (outline, dust halo, wash),
+/// so text and dust stay visible whether the desktop behind the widget is white, black or a busy wallpaper.
 struct CaptionPalette {
     var text: Color
-    var halo: Color
+    /// Outline / shadow color around the glyphs: dark for light text, light for dark text.
+    var outline: Color
+    var outlineStyle: OutlineStyle
     var dust: Color
     var dustHalo: Color
-    /// Faint constant wash under the dust that gives the glyph silhouettes a body.
+    /// Faint constant washes under the dust that give the glyph silhouettes a body: a dark one that shows on
+    /// light backdrops and a (fainter) light one that shows on dark backdrops.
     var dustWash: Color
-    /// Outline-style halo (universal tone) instead of a soft drop shadow.
-    var strongOutline: Bool
+    var dustLightWash: Color
 }
 
 extension Preferences {
     var palette: CaptionPalette {
-        let ink = RGBAColor(r: 0.07, g: 0.08, b: 0.11, a: 1)
+        let ink = RGBAColor(r: 0.09, g: 0.10, b: 0.13, a: 1)
         let text: RGBAColor
         switch tone {
-        case .universal, .light: text = .white
+        case .light: text = .white
         case .dark: text = ink
         case .custom: text = textColor
         }
         let dust = dustUsesTextColor ? text : dustColor
-        func halo(for c: RGBAColor) -> Color { c.luminance > 0.5 ? .black : .white }
-        // Universal tone has to work on light pages too, so its wash is the dark halo; light/dark tones
-        // use the dust's own color (dark text → dark wash on a light page, and vice versa).
-        let wash = tone == .universal ? halo(for: dust) : dust.color
-        return CaptionPalette(text: text.color, halo: halo(for: text),
-                              dust: dust.color, dustHalo: halo(for: dust), dustWash: wash,
-                              strongOutline: tone == .universal)
+
+        // Opposite tone: near-black (not pure) for light colors, white for dark ones.
+        func opposite(of c: RGBAColor) -> RGBAColor {
+            c.luminance > 0.5 ? RGBAColor(r: 0.05, g: 0.06, b: 0.09, a: 1) : .white
+        }
+        // The wash is whichever of dust / its twin is darker: that is the one that shows on a light page,
+        // and on a dark page the wash simply vanishes while the specks themselves carry.
+        let twin = opposite(of: dust)
+        let darker = dust.luminance < twin.luminance ? dust : twin
+        let lighter = dust.luminance < twin.luminance ? twin : dust
+
+        return CaptionPalette(text: text.color, outline: opposite(of: text).color, outlineStyle: outlineStyle,
+                              dust: dust.color, dustHalo: twin.color,
+                              dustWash: darker.color, dustLightWash: lighter.color)
     }
 }
 
@@ -313,6 +337,19 @@ extension Preferences {
         // One-time migrations.
         let storedVersion = stored["schemaVersion"] as? Int ?? 1
         if storedVersion < 2 { merged["textAnchor"] = TextAnchorChoice.top.rawValue }
+        if storedVersion < 3 {
+            // "universal" tone meant white text with an outline; the old shadow toggle could silently switch
+            // that outline off, so someone who chose it gets the outline they asked for.
+            let oldTone = stored["tone"] as? String
+            if oldTone == nil || oldTone == "universal" {
+                merged["tone"] = TextTone.light.rawValue
+                merged["outlineStyle"] = OutlineStyle.crisp.rawValue
+            } else if (stored["textShadow"] as? Bool) == false {
+                merged["outlineStyle"] = OutlineStyle.none.rawValue
+            } else {
+                merged["outlineStyle"] = OutlineStyle.soft.rawValue
+            }
+        }
         merged["schemaVersion"] = Preferences().schemaVersion
 
         guard let d = try? JSONSerialization.data(withJSONObject: merged),

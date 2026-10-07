@@ -5,7 +5,7 @@ import Foundation
 enum AppDefaults {
     static let isDebugRun: Bool = {
         let env = ProcessInfo.processInfo.environment
-        return env["VEIL_SNAPSHOT_DIR"] != nil || env["VEIL_FEED_FILE"] != nil || env["VEIL_MIC_PROBE"] != nil
+        return env["VEIL_SNAPSHOT_DIR"] != nil || env["VEIL_FEED_FILE"] != nil || env["VEIL_MIC_PROBE"] != nil || env["VEIL_STYLE_LAB"] != nil
     }()
 
     static let store: UserDefaults = {
